@@ -6,6 +6,7 @@ One would most likely expect to get back the time at which new permits are avail
 
 ### Reproduction steps
 The following slighty modified test passes, which means the metadata is the same, even after a significant delay.
+```csharp
 [Fact]
 public async Task CorrectRetryMetadataWithQueuedItem()
 {
@@ -30,9 +31,11 @@ public async Task CorrectRetryMetadataWithQueuedItem()
     Assert.True(failedLease.TryGetMetadata(MetadataName.RetryAfter, out var typedMetadata));
     Assert.Equal(options.Window.Ticks, typedMetadata.Ticks);
 }
+```
 
 Say we were to set a timer to retry getting the permit at the specified RetryAfter:
 The test passes since the new request simply undercuts the old request.
+```csharp
 [Fact]
 public async Task NewRequestUndercutsOldRequest()
 {
@@ -76,7 +79,7 @@ public async Task NewRequestUndercutsOldRequest()
     // Wait for all tasks to complete.
     await Task.WhenAll(tasks);
 }
-
+```
 
 ### Expected behavior
 The Retry-After header should reflect the remaining time until the next request is permissible.
@@ -86,6 +89,7 @@ In test 2 the old request should have gotten the permit.
 
 ### Actual behavior
 The Retry-After header only reflects the static window value defined in the options, ignoring the elapsed time.
+
 In test 2 this results in a new request getting the permit.
 
 ### Considerations
@@ -99,25 +103,26 @@ The window refreshes in 1 second and no permits are available. Request1 requests
 
 ### Proposed change
 A barbaric but fair solution:
-1. Let all requests have a fair fight for the permits. All the requests get a RetryAfter value that represents when the window is refreshed. This way all requests know when they can ask for a permit and have pretty equal chances of either getting the permit or being put in queue.
+
+Let all requests have a fair fight for the permits. All the requests get a RetryAfter value that represents when the window is refreshed. This way all requests know when they can ask for a permit and have pretty equal chances of either getting the permit or being put in queue.
 I realise that, in terms of queue times, in wont have any significant effect if there are no new requests to take the leases. But wouldnt it make more sense to be put in queue, rather than hope to maybe get a permit?
 
 Remove the permit parameter from the function and only return the remaining time.
-
+```csharp
 private FixedWindowLease CreateFailedWindowLease()
 {
     // Return the remaining time 
     TimeSpan? remainingTime = _options.Window - RateLimiterHelper.GetElapsedTime(_lastReplenishmentTick);
     return new FixedWindowLease(false, remainingTime);
 }
-
+```
 
 ### Risks
-As pointed out in Issue-77991, the suggested solution is quite difficult to unit test, since the RetryAfter would be hard most likely won't be exactly the same every run.
-An example of a test failing:
-Assert.Equal() Failure: Values differ
-Expected: 200000000
-Actual:   199999954
+As pointed out in Issue-77991, the suggested solution is quite difficult to unit test, since the RetryAfter most likely won't be exactly the same every run.
+An example of a test failing:\
+Assert.Equal() Failure: Values differ\
+Expected: 200000000\
+Actual:   199999954\
 
 The overall risk of being in limbo is still there, but is greatly minimised since a request would try again as soon as a new window is available, thereby reducing the chance of being undercut by newer requests.
 
